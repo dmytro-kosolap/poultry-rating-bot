@@ -223,14 +223,14 @@ async def cmd_rate(message: Message, state: FSMContext):
     voter = await ensure_registered(message.from_user, message.chat.id)
 
     async def reply(text, **kwargs):
-        """Завжди відповідаємо в приват. Якщо команда з групи — пишемо туди підказку."""
         try:
+            logger.info(f"Спроба надіслати в приват user_id={user_id} is_group={is_group}")
             await bot.send_message(user_id, text, **kwargs)
+            logger.info(f"Успішно надіслано в приват!")
             if is_group:
-                # Коротка підказка в групі щоб людина знала що бот написав в приват
                 await message.reply("📩 Перевірте особисті повідомлення від бота!")
-        except Exception:
-            # Якщо бот не може написати в приват (не розпочато чат) — пишемо в групу
+        except Exception as e:
+            logger.error(f"Помилка надсилання в приват: {e}")
             await message.answer(
                 "⚠️ Спочатку напишіть боту в приват: натисніть на ім'я бота → Start\n"
                 "Потім повторіть команду /rate"
