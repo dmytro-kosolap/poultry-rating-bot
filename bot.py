@@ -224,17 +224,35 @@ async def cmd_rate(message: Message, state: FSMContext):
 
     async def reply(text, **kwargs):
         try:
-            logger.info(f"Спроба надіслати в приват user_id={user_id} is_group={is_group}")
+            # Спочатку пробуємо написати в приват
             await bot.send_message(user_id, text, **kwargs)
-            logger.info(f"Успішно надіслано в приват!")
             if is_group:
-                await message.reply("📩 Перевірте особисті повідомлення від бота!")
+                # Видаляємо повідомлення з групи і пишемо підказку
+                try:
+                    await message.delete()
+                except Exception:
+                    pass
+                hint = await message.answer("📩 Перевірте особисті повідомлення від бота!")
+                # Видаляємо підказку через 5 секунд
+                import asyncio as _asyncio
+                await _asyncio.sleep(5)
+                try:
+                    await hint.delete()
+                except Exception:
+                    pass
         except Exception as e:
-            logger.error(f"Помилка надсилання в приват: {e}")
-            await message.answer(
-                "⚠️ Спочатку напишіть боту в приват: натисніть на ім'я бота → Start\n"
-                "Потім повторіть команду /rate"
-            )
+            logger.error(f"Не вдалось написати в приват user_id={user_id}: {e}")
+            if is_group:
+                hint = await message.answer(
+                    "⚠️ Напишіть боту /start в приват спочатку: @rating_ptcua_bot"
+                )
+                import asyncio as _asyncio
+                await _asyncio.sleep(5)
+                try:
+                    await hint.delete()
+                    await message.delete()
+                except Exception:
+                    pass
 
     if not has_voting_rights(voter):
         days = (datetime.utcnow() - voter["joined_at"]).days
