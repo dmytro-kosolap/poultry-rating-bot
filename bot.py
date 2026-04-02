@@ -217,12 +217,29 @@ async def cmd_members(message: Message):
 
 @dp.message(Command("rate"))
 async def cmd_rate(message: Message, state: FSMContext):
+    user_id = message.from_user.id
+    is_group = message.chat.type in ("group", "supergroup")
+
     voter = await ensure_registered(message.from_user, message.chat.id)
+
+    async def reply(text, **kwargs):
+        """Завжди відповідаємо в приват. Якщо команда з групи — пишемо туди підказку."""
+        try:
+            await bot.send_message(user_id, text, **kwargs)
+            if is_group:
+                # Коротка підказка в групі щоб людина знала що бот написав в приват
+                await message.reply("📩 Перевірте особисті повідомлення від бота!")
+        except Exception:
+            # Якщо бот не може написати в приват (не розпочато чат) — пишемо в групу
+            await message.answer(
+                "⚠️ Спочатку напишіть боту в приват: натисніть на ім'я бота → Start\n"
+                "Потім повторіть команду /rate"
+            )
 
     if not has_voting_rights(voter):
         days = (datetime.utcnow() - voter["joined_at"]).days
         remaining = MIN_DAYS_TO_VOTE - days
-        await message.answer(
+        await reply(
             f"⏳ Ви ще не можете голосувати.\n"
             f"Потрібно ще <b>{remaining}</b> дн. в групі.",
             parse_mode="HTML",
@@ -238,7 +255,7 @@ async def cmd_rate(message: Message, state: FSMContext):
     else:
         parts = message.text.split()
         if len(parts) < 2:
-            await message.answer(
+            await reply(
                 "Як оцінити продавця:\n\n"
                 "1️⃣ Знайдіть повідомлення продавця в групі\n"
                 "2️⃣ Натисніть «Відповісти» на його повідомлення\n"
@@ -252,17 +269,17 @@ async def cmd_rate(message: Message, state: FSMContext):
         seller = await db.get_member_by_id(int(arg)) if arg.isdigit() else await db.get_member_by_username(arg)
 
     if not seller:
-        await message.answer("Учасника не знайдено в групі.")
+        await reply("Учасника не знайдено в групі.")
         return
 
     if seller["user_id"] == message.from_user.id:
-        await message.answer("Не можна оцінювати самого себе. 😄")
+        await reply("Не можна оцінювати самого себе. 😄")
         return
 
     if not can_receive_rating(seller):
         days = (datetime.utcnow() - seller["joined_at"]).days
         remaining = MIN_DAYS_TO_BE_RATED - days
-        await message.answer(
+        await reply(
             f"{display_name(seller)} ще не може отримувати оцінки.\n"
             f"Потрібно ще {remaining} дн. в групі."
         )
@@ -281,11 +298,14 @@ async def cmd_rate(message: Message, state: FSMContext):
     await state.set_state(RateStates.waiting_score)
 
     action = "Оновіть оцінку" if existing else "Оцініть"
-    await message.answer(
+    await bot.send_message(
+        user_id,
         f"{action} <b>{display_name(seller)}</b> від 1 до 5:",
         reply_markup=score_kbd(),
         parse_mode="HTML",
     )
+    if is_group:
+        await message.reply("📩 Перевірте особисті повідомлення від бота!")
 
 
 @dp.message(RateStates.waiting_score)
