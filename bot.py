@@ -215,7 +215,7 @@ async def cmd_members(message: Message):
     await message.answer("\n".join(lines), parse_mode="HTML")
 
 
-@dp.message(Command("rate"))
+@dp.message(Command("rate", ignore_mention=True))
 async def cmd_rate(message: Message, state: FSMContext):
     user_id = message.from_user.id
     is_group = message.chat.type in ("group", "supergroup")
@@ -402,8 +402,12 @@ async def cmd_unfreeze(message: Message):
 
 async def main():
     await db.init()
-    logger.info("Бот запущено!")
-    await dp.start_polling(bot, allowed_updates=["message", "chat_member"])
+    bot_info = await bot.get_me()
+    logger.info(f"Бот запущено! @{bot_info.username}")
+    await dp.start_polling(
+        bot,
+        allowed_updates=["message", "chat_member"],
+    )
 
 
 if __name__ == "__main__":
