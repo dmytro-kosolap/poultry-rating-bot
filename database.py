@@ -22,6 +22,15 @@ class Database:
                     is_frozen   INTEGER DEFAULT 0
                 )
             """)
+            
+            # Міграція: додаємо full_name, якщо таблиця вже існувала без цієї колонки
+            try:
+                await db.execute("ALTER TABLE members ADD COLUMN full_name TEXT")
+                await db.commit()
+            except aiosqlite.OperationalError:
+                # Колонка вже існує
+                pass
+
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS ratings (
                     id              INTEGER PRIMARY KEY AUTOINCREMENT,
