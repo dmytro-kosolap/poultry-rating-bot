@@ -7,50 +7,74 @@ from typing import Optional
 DB_PATH = os.environ.get("DB_PATH", "rating.db")
 logger = logging.getLogger(__name__)
 
+_launch_date: Optional[datetime] = None
+
 
 class Database:
     def __init__(self):
         self.db_path = DB_PATH
 
+    def get_launch_date(self) -> Optional[datetime]:
+        return _launch_date
+
     async def init(self):
+        global _launch_date
         async with aiosqlite.connect(self.db_path) as db:
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS members (
-                    user_id     INTEGER PRIMARY KEY,
-                    username    TEXT,
-                    full_name   TEXT,
-                    chat_id     INTEGER,
-                    joined_at   TEXT DEFAULT (datetime('now')),
-                    is_frozen   INTEGER DEFAULT 0
+                    user_id   INTEGER PRIMARY KEY,
+                    username  TEXT,
+                    full_name TEXT,
+                    chat_id   INTEGER,
+                    joined_at TEXT DEFAULT (datetime('now')),
+                    is_frozen INTEGER DEFAULT 0
                 )
             """)
-            
-            # Міграція: додаємо full_name, якщо таблиця вже існувала без цієї колонки
+            # Міграція: додаємо full_name якщо таблиця вже існувала
             try:
                 await db.execute("ALTER TABLE members ADD COLUMN full_name TEXT")
                 await db.commit()
-                logger.info("Database migration: column 'full_name' added to 'members' table.")
+                logger.info("Міграція: додано колонку full_name")
             except aiosqlite.OperationalError:
-                # Колонка вже існує
-                logger.debug("Database migration: column 'full_name' already exists in 'members' table.")
                 pass
 
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS ratings (
-                    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-                    voter_id        INTEGER NOT NULL,
-                    voter_username  TEXT,
-                    seller_id       INTEGER NOT NULL,
-                    score           INTEGER NOT NULL CHECK(score BETWEEN 1 AND 5),
-                    review_text     TEXT DEFAULT '',
-                    created_at      TEXT DEFAULT (datetime('now')),
-                    updated_at      TEXT DEFAULT (datetime('now')),
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    voter_id       INTEGER NOT NULL,
+                    voter_username TEXT,
+                    seller_id      INTEGER NOT NULL,
+                    score          INTEGER NOT NULL CHECK(score BETWEEN 1 AND 5),
+                    review_text    TEXT DEFAULT '',
+                    created_at     TEXT DEFAULT (datetime('now')),
+                    updated_at     TEXT DEFAULT (datetime('now')),
                     FOREIGN KEY(voter_id)  REFERENCES members(user_id),
                     FOREIGN KEY(seller_id) REFERENCES members(user_id),
                     UNIQUE(voter_id, seller_id)
                 )
             """)
+            await db.execute("""
+                CREATE TABLE IF NOT EXISTS settings (
+                    key   TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
             await db.execute("CREATE INDEX IF NOT EXISTS idx_ratings_seller ON ratings(seller_id)")
+
+            # Зберігаємо дату першого запуску (grandfathering)
+            async with db.execute("SELECT value FROM settings WHERE key='launch_date'") as cur:
+                row = await cur.fetchone()
+                if row:
+                    _launch_date = datetime.fromisoformat(row[0])
+                else:
+                    now = datetime.utcnow()
+                    await db.execute(
+                        "INSERT INTO settings(key, value) VALUES('launch_date', ?)",
+                        (now.isoformat(),)
+                    )
+                    _launch_date = now
+                    logger.info(f"Дата запуску збережена: {now}")
+
             await db.commit()
 
     # ── Учасники ──────────────────────────────────────────────────────────────
@@ -76,7 +100,7 @@ class Database:
                 if not row:
                     return None
                 d = dict(row)
-                d['joined_at'] = datetime.fromisoformat(d['joined_at'])
+                d["joined_at"] = datetime.fromisoformat(d["joined_at"])
                 return d
 
     async def get_member_by_username(self, username: str) -> Optional[dict]:
@@ -89,8 +113,22 @@ class Database:
                 if not row:
                     return None
                 d = dict(row)
-                d['joined_at'] = datetime.fromisoformat(d['joined_at'])
+                d["joined_at"] = datetime.fromisoformat(d["joined_at"])
                 return d
+
+    async def get_all_members(self) -> list:
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            async with db.execute(
+                "SELECT * FROM members WHERE is_frozen = 0 ORDER BY full_name"
+            ) as cur:
+                rows = await cur.fetchall()
+                result = []
+                for row in rows:
+                    d = dict(row)
+                    d["joined_at"] = datetime.fromisoformat(d["joined_at"])
+                    result.append(d)
+                return result
 
     async def freeze_member(self, username: str) -> bool:
         async with aiosqlite.connect(self.db_path) as db:
@@ -100,10 +138,26 @@ class Database:
             await db.commit()
             return cur.rowcount > 0
 
+    async def freeze_member_by_id(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "UPDATE members SET is_frozen = 1 WHERE user_id = ?", (user_id,)
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
     async def unfreeze_member(self, username: str) -> bool:
         async with aiosqlite.connect(self.db_path) as db:
             cur = await db.execute(
                 "UPDATE members SET is_frozen = 0 WHERE username = ?", (username,)
+            )
+            await db.commit()
+            return cur.rowcount > 0
+
+    async def unfreeze_member_by_id(self, user_id: int) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cur = await db.execute(
+                "UPDATE members SET is_frozen = 0 WHERE user_id = ?", (user_id,)
             )
             await db.commit()
             return cur.rowcount > 0
@@ -149,13 +203,12 @@ class Database:
                 JOIN members m ON m.user_id = r.seller_id
                 WHERE m.is_frozen = 0
                 GROUP BY r.seller_id
-                HAVING review_count >= 1
                 ORDER BY avg_score DESC, review_count DESC
                 LIMIT ?
             """, (limit,)) as cur:
                 return [dict(row) for row in await cur.fetchall()]
 
-    async def get_seller_profile_by_id(self, user_id: int) -> Optional[dict]:
+    async def get_seller_profile(self, user_id: int) -> Optional[dict]:
         async with aiosqlite.connect(self.db_path) as db:
             db.row_factory = aiosqlite.Row
             async with db.execute("""
@@ -168,21 +221,19 @@ class Database:
                 GROUP BY m.user_id
             """, (user_id,)) as cur:
                 row = await cur.fetchone()
-                if not row or row['avg_score'] is None:
+                if not row or row["avg_score"] is None:
                     return None
                 result = dict(row)
-                result['joined_at'] = datetime.fromisoformat(result['joined_at'])
+                result["joined_at"] = datetime.fromisoformat(result["joined_at"])
 
-            # Останні 5 відгуків
             async with db.execute("""
                 SELECT r.score, r.review_text, r.voter_username, r.updated_at
                 FROM ratings r
-                JOIN members m ON m.user_id = r.seller_id
-                WHERE m.user_id = ?
+                WHERE r.seller_id = ?
                 ORDER BY r.updated_at DESC
                 LIMIT 5
             """, (user_id,)) as cur:
-                result['recent_reviews'] = [dict(row) for row in await cur.fetchall()]
+                result["recent_reviews"] = [dict(row) for row in await cur.fetchall()]
 
             return result
 
