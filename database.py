@@ -1,9 +1,11 @@
 import aiosqlite
 import os
+import logging
 from datetime import datetime
 from typing import Optional
 
 DB_PATH = os.environ.get("DB_PATH", "rating.db")
+logger = logging.getLogger(__name__)
 
 
 class Database:
@@ -27,8 +29,10 @@ class Database:
             try:
                 await db.execute("ALTER TABLE members ADD COLUMN full_name TEXT")
                 await db.commit()
+                logger.info("Database migration: column 'full_name' added to 'members' table.")
             except aiosqlite.OperationalError:
                 # Колонка вже існує
+                logger.debug("Database migration: column 'full_name' already exists in 'members' table.")
                 pass
 
             await db.execute("""
